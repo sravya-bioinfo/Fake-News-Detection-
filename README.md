@@ -1,75 +1,47 @@
-Fake News Detection (fake_news_detection.py + README.md)
-
-Preprocesses text: removes URLs, HTML, punctuation, stopwords
-TF-IDF vectorizer + Logistic Regression pipeline
-Evaluates with Accuracy, Precision, Recall, F1, Confusion Matrix
-Error analysis section for false positives/negatives
-Interactive CLI to classify your own news text
-Works out-of-the-box with synthetic data if Kaggle CSV isn't downloaded yet
-
-
-# Stock Price Prediction
-**Industry:** Finance | **Domain:** AI & ML | **Tools:** Python, Pandas, TensorFlow/Keras, Matplotlib
+# Fake News Detection
+**Industry:** Media | **Domain:** AI & ML | **Tools:** Python, Scikit-learn, NLTK
 
 ---
 
 ## Project Overview
 
-This project predicts future stock closing prices using historical price data and technical indicators. An **LSTM (Long Short-Term Memory)** neural network learns temporal patterns in price time-series to forecast the next trading day's closing price.
+This project builds an NLP-based machine learning model to classify news articles as **REAL** or **FAKE**. It demonstrates end-to-end machine learning: data loading, text preprocessing, model training, evaluation, error analysis, and a prediction interface.
 
 ---
 
 ## Folder Structure
 
 ```
-stock_price_prediction/
-├── stock_price_prediction.py    ← Main script (all steps)
-├── stock_prediction_plot.png    ← Generated visualization (after running)
-└── README.md                    ← This file
+fake_news_detection/
+├── fake_news_detection.py   ← Main script (all steps)
+├── train.csv                ← Kaggle dataset (download separately)
+└── README.md                ← This file
 ```
 
 ---
 
 ## Dataset
 
-**Option 1 — Yahoo Finance (Recommended):**
-```bash
-pip install yfinance
-```
-The script automatically downloads data for the configured ticker (default: `AAPL`).
+Download from Kaggle:  
+🔗 https://www.kaggle.com/c/fake-news/data
 
-**Option 2 — Kaggle Stock Data:**  
-🔗 https://www.kaggle.com/datasets/camnugent/sandp500
+Place `train.csv` in the same folder as the script.  
+**Columns used:** `title`, `author`, `text`, `label` (0=REAL, 1=FAKE)
 
-> If neither is available, the script generates synthetic data using Geometric Brownian Motion so you can still run and demonstrate the model.
+> If the CSV is not found, the script auto-generates synthetic demo data so you can still run it.
 
 ---
 
 ## How to Run
 
 ### 1. Install dependencies
-
-**Minimum (no TensorFlow):**
 ```bash
-pip install pandas numpy scikit-learn matplotlib
+pip install pandas numpy scikit-learn nltk
 ```
 
-**Full (with LSTM):**
+### 2. Run the script
 ```bash
-pip install pandas numpy scikit-learn matplotlib tensorflow yfinance
-```
-
-### 2. Configure the ticker (optional)
-Edit the top of `stock_price_prediction.py`:
-```python
-TICKER     = "AAPL"        # Change to any stock symbol
-START_DATE = "2018-01-01"
-END_DATE   = "2023-12-31"
-```
-
-### 3. Run
-```bash
-python stock_price_prediction.py
+python fake_news_detection.py
 ```
 
 ---
@@ -78,23 +50,20 @@ python stock_price_prediction.py
 
 | Step | Description |
 |------|-------------|
-| 1 | **Load Data** — Yahoo Finance API or synthetic GBM data |
-| 2 | **Indicators** — Compute SMA-20, SMA-50, RSI-14 |
-| 3 | **Preprocess** — Normalize with MinMaxScaler, create 60-day sequences |
-| 4 | **Train LSTM** — Stacked LSTM (128 → 64 → Dense) with early stopping |
-| 5 | **Evaluate** — RMSE, MAPE, directional accuracy backtest |
-| 6 | **Visualize** — Actual vs Predicted, Moving Averages, RSI chart (saved as PNG) |
+| 1 | **Load Data** — Read CSV, combine title + author + text |
+| 2 | **Preprocess** — Lowercase, remove URLs/HTML/punctuation, remove stopwords |
+| 3 | **Train** — TF-IDF Vectorizer + Logistic Regression (80/20 split) |
+| 4 | **Evaluate** — Accuracy, Precision, Recall, F1, Confusion Matrix |
+| 5 | **Error Analysis** — Review false positives and false negatives |
+| 6 | **Predict** — Demo interface to classify your own news text |
 
 ---
 
 ## Key Concepts
 
-- **LSTM (Long Short-Term Memory):** A type of recurrent neural network that can learn long-range dependencies in sequential data — ideal for time-series like stock prices.
-- **Technical Indicators:**
-  - **SMA (Simple Moving Average):** Smooths price data to identify trends.
-  - **RSI (Relative Strength Index):** Measures momentum. RSI > 70 = overbought, RSI < 30 = oversold.
-- **RMSE (Root Mean Squared Error):** Average prediction error in original dollar units — lower is better.
-- **Backtest:** Simulates trading based on model predictions to measure real-world direction accuracy.
+- **TF-IDF (Term Frequency–Inverse Document Frequency):** Converts text into numbers by weighting words that are common in a document but rare across the corpus — great for distinguishing writing styles.
+- **Logistic Regression:** A fast, interpretable classifier that works very well on high-dimensional TF-IDF features.
+- **Precision vs Recall trade-off:** Precision = how many flagged articles are truly fake; Recall = how many fake articles we successfully caught.
 
 ---
 
@@ -104,25 +73,18 @@ python stock_price_prediction.py
 ══════════════════════════════════════════════════
   MODEL EVALUATION RESULTS
 ══════════════════════════════════════════════════
-  RMSE : $3.47  (avg prediction error in dollars)
-  MAPE : 1.89%  (mean absolute percentage error)
+  Accuracy  : 0.9823  (98.23%)
+  Precision : 0.9811
+  Recall    : 0.9836
+  F1 Score  : 0.9823
 ══════════════════════════════════════════════════
-
-  Backtest — Direction Accuracy: 54.3%
-  (Predicted the correct direction 152/280 times)
 ```
-
-A plot `stock_prediction_plot.png` is also saved showing:
-- Actual vs. Predicted prices (test period)
-- Historical prices with SMA-20 and SMA-50
-- RSI indicator with overbought/oversold zones
 
 ---
 
 ## Extending the Project
 
-- **Try GRU** (Gated Recurrent Unit) — faster to train, similar accuracy
-- **Add more features** — MACD, Bollinger Bands, sentiment from news
-- **Multi-step forecasting** — predict 5 or 30 days ahead
-- **Portfolio optimization** — apply predictions across multiple tickers
+- **Use BERT embeddings** (HuggingFace `transformers`) for higher accuracy
+- **Add an LSTM** layer for sequence-aware classification
+- **Deploy as a web app** using Flask or Streamlit
 
