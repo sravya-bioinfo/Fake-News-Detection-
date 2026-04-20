@@ -1,0 +1,414 @@
+"""
+=============================================================
+  Fake News Detection using NLP
+  Industry: Media
+  Tools: Python, Scikit-learn, NLTK, (optionally HuggingFace)
+=============================================================
+
+Description:
+    This script builds a machine learning pipeline to classify
+    news articles as REAL or FAKE using NLP techniques.
+
+Steps:
+    1. Load and preprocess text data
+    2. Split into train/test sets
+    3. Train a Logistic Regression model (TF-IDF based)
+    4. Evaluate with accuracy, precision, recall, F1
+    5. Analyze false positives and false negatives
+    6. Provide a simple prediction interface
+
+Dataset:
+    Fake News Dataset from Kaggle:
+    https://www.kaggle.com/c/fake-news/data
+    Files needed: train.csv (columns: id, title, author, text, label)
+    label: 1 = FAKE, 0 = REAL
+
+Usage:
+    python fake_news_detection.py
+"""
+
+import os
+import re
+import numpy as np
+import pandas as pd
+import nltk
+import warnings
+
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (accuracy_score, precision_score,
+                             recall_score, f1_score,
+                             classification_report, confusion_matrix)
+from sklearn.pipeline import Pipeline
+
+warnings.filterwarnings("ignore")
+
+# ─── NLTK Downloads ────────────────────────────────────────────────────────────
+nltk.download("stopwords", quiet=True)
+nltk.download("punkt", quiet=True)
+from nltk.corpus import stopwords
+
+STOP_WORDS = set(stopwords.words("english"))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 1 — DATA LOADING
+# ══════════════════════════════════════════════════════════════════════════════
+
+def load_data(filepath: str) -> pd.DataFrame:
+    """
+    Load the Kaggle Fake News dataset CSV.
+
+    Args:
+        filepath: Path to train.csv
+
+    Returns:
+        DataFrame with columns [title, author, text, label]
+    """
+    print(f"\n[1/5] Loading data from: {filepath}")
+    df = pd.read_csv(filepath)
+
+    # Keep relevant columns; fill missing values
+    df = df[["title", "author", "text", "label"]].copy()
+    df.fillna("", inplace=True)
+
+    # Combine title + author + text for richer signal
+    df["content"] = (
+        df["title"].astype(str) + " " +
+        df["author"].astype(str) + " " +
+        df["text"].astype(str)
+    )
+
+    print(f"    Total samples : {len(df)}")
+    print(f"    REAL (0)      : {(df['label'] == 0).sum()}")
+    print(f"    FAKE (1)      : {(df['label'] == 1).sum()}")
+    return df
+
+
+def generate_sample_data() -> pd.DataFrame:
+    """
+    Generate a small synthetic dataset for demo purposes
+    when the Kaggle CSV is not available.
+    """
+    print("\n[INFO] Kaggle CSV not found — generating synthetic demo data.")
+    real_samples = [
+        ("Scientists discover new species in Amazon", "John Smith",
+         "Researchers from Harvard University announced today the discovery of a previously unknown amphibian species deep within the Amazon rainforest. The team published their findings in the peer-reviewed journal Nature.", 0),
+        ("Federal Reserve raises interest rates by 0.25%", "Jane Doe",
+         "The Federal Reserve increased its benchmark interest rate by a quarter percentage point, citing continued progress in reducing inflation. Chair Jerome Powell held a press conference to explain the decision.", 0),
+        ("Local hospital opens new cardiac unit", "Mike Johnson",
+         "City General Hospital unveiled its state-of-the-art cardiac care unit on Friday. The $50 million facility includes the latest imaging technology and will serve patients across the region.", 0),
+        ("Tech company reports record quarterly earnings", "Sara Lee",
+         "Silicon Valley firm TechCorp posted its highest ever quarterly revenue of $12 billion, beating analyst estimates by 8%. The company credited strong cloud computing demand.", 0),
+        ("Government passes new climate legislation", "Tom Brown",
+         "Congress passed the Clean Future Act with a bipartisan majority. The legislation sets binding targets for carbon emission reductions and allocates funding for renewable energy infrastructure.", 0),
+    ]
+    fake_samples = [
+        ("SHOCKING: President secretly reptile alien confirmed", "Anonymous",
+         "Multiple insiders have confirmed that world leaders are in fact shape-shifting reptilian aliens. A classified government document proves the entire ruling class is not human. Share before they delete this.", 1),
+        ("5G towers cause COVID spread, scientist warns", "Truth Seeker",
+         "A brave scientist who was fired for speaking out claims that 5G towers are responsible for transmitting the coronavirus. The mainstream media is hiding this explosive revelation from the public.", 1),
+        ("Miracle cure for cancer hidden by Big Pharma", "Health Warrior",
+         "A cheap fruit extract cures all types of cancer but pharmaceutical companies are suppressing the cure to protect profits. Doctors don't want you to know this one simple trick.", 1),
+        ("Moon landing was faked in Hollywood studio", "Wake Up America",
+         "Newly released declassified footage proves that Stanley Kubrick filmed the Apollo moon landing in a secret Hollywood studio. NASA has been lying to the public for over 50 years.", 1),
+        ("Drinking bleach boosts immune system doctors say", "Natural Health News",
+         "A group of rogue doctors are finally speaking the truth: consuming diluted bleach activates your body's immune response and protects against all viruses. The FDA is trying to cover it up.", 1),
+    ]
+    # Multiply samples to make a reasonably sized demo dataset
+    all_samples = (real_samples + fake_samples) * 40
+    np.random.shuffle(all_samples)
+
+    rows = [{"title": t, "author": a, "text": txt, "label": lbl}
+            for t, a, txt, lbl in all_samples]
+    df = pd.DataFrame(rows)
+    df["content"] = df["title"] + " " + df["author"] + " " + df["text"]
+
+    print(f"    Total samples : {len(df)}")
+    print(f"    REAL (0)      : {(df['label'] == 0).sum()}")
+    print(f"    FAKE (1)      : {(df['label'] == 1).sum()}")
+    return df
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 2 — TEXT PREPROCESSING
+# ══════════════════════════════════════════════════════════════════════════════
+
+def preprocess_text(text: str) -> str:
+    """
+    Clean and normalize raw text for NLP processing.
+
+    Steps:
+        - Lowercase
+        - Remove URLs, HTML tags, punctuation, and digits
+        - Tokenize and remove stop words
+        - Rejoin tokens
+
+    Args:
+        text: Raw string input
+
+    Returns:
+        Cleaned string
+    """
+    text = text.lower()
+    text = re.sub(r"http\S+|www\S+", "", text)          # remove URLs
+    text = re.sub(r"<.*?>", "", text)                    # remove HTML
+    text = re.sub(r"[^a-z\s]", "", text)                 # keep letters only
+    tokens = text.split()
+    tokens = [w for w in tokens if w not in STOP_WORDS and len(w) > 2]
+    return " ".join(tokens)
+
+
+def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply preprocessing to the combined content column."""
+    print("\n[2/5] Preprocessing text...")
+    df["clean_content"] = df["content"].apply(preprocess_text)
+    print(f"    Sample (before): {df['content'].iloc[0][:80]}...")
+    print(f"    Sample (after) : {df['clean_content'].iloc[0][:80]}...")
+    return df
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 3 — TRAIN / TEST SPLIT + MODEL TRAINING
+# ══════════════════════════════════════════════════════════════════════════════
+
+def build_pipeline() -> Pipeline:
+    """
+    Build a scikit-learn Pipeline:
+        TF-IDF Vectorizer → Logistic Regression
+
+    TF-IDF converts text to numerical features by weighting terms
+    based on how often they appear in a document vs the corpus.
+    Logistic Regression is fast, interpretable, and effective for text.
+
+    Returns:
+        Untrained sklearn Pipeline
+    """
+    pipeline = Pipeline([
+        ("tfidf", TfidfVectorizer(
+            max_features=50_000,     # top 50k vocabulary terms
+            ngram_range=(1, 2),      # unigrams + bigrams
+            min_df=2,                # ignore very rare terms
+            sublinear_tf=True,       # log-scale term frequencies
+        )),
+        ("clf", LogisticRegression(
+            max_iter=1000,
+            C=1.0,                   # regularisation strength
+            solver="lbfgs",
+            random_state=42,
+        )),
+    ])
+    return pipeline
+
+
+def train_model(df: pd.DataFrame):
+    """
+    Split data and train the NLP pipeline.
+
+    Args:
+        df: Preprocessed DataFrame
+
+    Returns:
+        Tuple of (trained pipeline, X_test, y_test, df_test)
+    """
+    print("\n[3/5] Splitting data and training model...")
+
+    X = df["clean_content"]
+    y = df["label"]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+
+    print(f"    Train samples : {len(X_train)}")
+    print(f"    Test samples  : {len(X_test)}")
+
+    pipeline = build_pipeline()
+    pipeline.fit(X_train, y_train)
+    print("    Model training complete ✓")
+
+    # Keep test rows for error analysis
+    df_test = df.iloc[y_test.index].copy()
+    df_test["predicted"] = pipeline.predict(X_test)
+    df_test["true_label"] = y_test.values
+
+    return pipeline, X_test, y_test, df_test
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 4 — EVALUATION
+# ══════════════════════════════════════════════════════════════════════════════
+
+def evaluate_model(pipeline, X_test, y_test):
+    """
+    Evaluate the trained model and print metrics.
+
+    Metrics:
+        - Accuracy  : Overall correct predictions
+        - Precision : Of predicted FAKE, how many were actually FAKE
+        - Recall    : Of actual FAKE articles, how many did we catch
+        - F1 Score  : Harmonic mean of precision and recall
+
+    Args:
+        pipeline: Trained sklearn Pipeline
+        X_test  : Test features (raw text series)
+        y_test  : True labels
+    """
+    print("\n[4/5] Evaluating model...")
+    y_pred = pipeline.predict(X_test)
+
+    acc  = accuracy_score(y_test, y_pred)
+    prec = precision_score(y_test, y_pred)
+    rec  = recall_score(y_test, y_pred)
+    f1   = f1_score(y_test, y_pred)
+    cm   = confusion_matrix(y_test, y_pred)
+
+    print("\n" + "═" * 50)
+    print("  MODEL EVALUATION RESULTS")
+    print("═" * 50)
+    print(f"  Accuracy  : {acc:.4f}  ({acc*100:.2f}%)")
+    print(f"  Precision : {prec:.4f}")
+    print(f"  Recall    : {rec:.4f}")
+    print(f"  F1 Score  : {f1:.4f}")
+    print("═" * 50)
+    print("\n  Confusion Matrix:")
+    print(f"  {'':10s} Pred REAL  Pred FAKE")
+    print(f"  {'True REAL':10s}   {cm[0][0]:5d}      {cm[0][1]:5d}")
+    print(f"  {'True FAKE':10s}   {cm[1][0]:5d}      {cm[1][1]:5d}")
+    print()
+    print("  Full Classification Report:")
+    print(classification_report(y_test, y_pred,
+                                target_names=["REAL", "FAKE"]))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 5 — FALSE POSITIVE / NEGATIVE ANALYSIS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def analyze_errors(df_test: pd.DataFrame, n: int = 3):
+    """
+    Identify and display false positives and false negatives.
+
+    False Positive : Model predicted FAKE, but article is actually REAL
+    False Negative : Model predicted REAL, but article is actually FAKE
+
+    Args:
+        df_test : Test DataFrame with true and predicted labels
+        n       : Number of examples to show per category
+    """
+    print("\n[5/5] Error Analysis — False Positives & Negatives")
+    print("─" * 50)
+
+    fp = df_test[(df_test["true_label"] == 0) & (df_test["predicted"] == 1)]
+    fn = df_test[(df_test["true_label"] == 1) & (df_test["predicted"] == 0)]
+
+    print(f"\n  False Positives (REAL predicted as FAKE): {len(fp)}")
+    for _, row in fp.head(n).iterrows():
+        snippet = row["content"][:120].replace("\n", " ")
+        print(f"    → {snippet}...")
+
+    print(f"\n  False Negatives (FAKE predicted as REAL): {len(fn)}")
+    for _, row in fn.head(n).iterrows():
+        snippet = row["content"][:120].replace("\n", " ")
+        print(f"    → {snippet}...")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 6 — PREDICTION INTERFACE
+# ══════════════════════════════════════════════════════════════════════════════
+
+def predict_article(pipeline, text: str) -> dict:
+    """
+    Predict whether a single news article is REAL or FAKE.
+
+    Args:
+        pipeline : Trained sklearn Pipeline
+        text     : Raw article text (title + body)
+
+    Returns:
+        Dict with keys: label, confidence, description
+    """
+    clean = preprocess_text(text)
+    prob  = pipeline.predict_proba([clean])[0]
+    pred  = pipeline.predict([clean])[0]
+
+    label = "FAKE" if pred == 1 else "REAL"
+    confidence = prob[pred] * 100
+
+    return {
+        "label"      : label,
+        "confidence" : f"{confidence:.1f}%",
+        "prob_real"  : f"{prob[0]*100:.1f}%",
+        "prob_fake"  : f"{prob[1]*100:.1f}%",
+    }
+
+
+def interactive_demo(pipeline):
+    """Run a simple command-line prediction interface."""
+    print("\n" + "═" * 50)
+    print("  FAKE NEWS DETECTOR — PREDICTION INTERFACE")
+    print("  (Type 'quit' to exit)")
+    print("═" * 50)
+
+    sample_articles = [
+        "Scientists at MIT have developed a new battery technology that can charge electric vehicles in under 5 minutes. The breakthrough uses solid-state electrolytes and was published in Science journal.",
+        "BREAKING: Government admits chemtrails are real and contain mind-control chemicals. Whistleblower pilot reveals the truth they don't want you to know. Share this before it gets deleted!",
+    ]
+
+    print("\n  --- Demo Predictions ---")
+    for article in sample_articles:
+        result = predict_article(pipeline, article)
+        print(f"\n  Article : {article[:70]}...")
+        print(f"  Result  : {result['label']} (confidence: {result['confidence']})")
+        print(f"  Prob    : REAL={result['prob_real']}, FAKE={result['prob_fake']}")
+
+    print("\n  --- Try Your Own ---")
+    while True:
+        user_input = input("\n  Enter news text (or 'quit'): ").strip()
+        if user_input.lower() == "quit":
+            break
+        if not user_input:
+            continue
+        result = predict_article(pipeline, user_input)
+        print(f"  → Prediction : {result['label']}")
+        print(f"  → Confidence : {result['confidence']}")
+        print(f"  → REAL prob  : {result['prob_real']}  |  FAKE prob: {result['prob_fake']}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN
+# ══════════════════════════════════════════════════════════════════════════════
+
+def main():
+    print("=" * 60)
+    print("  FAKE NEWS DETECTION — AI & ML Internship Project")
+    print("=" * 60)
+
+    # ── Load data ─────────────────────────────────────────────
+    DATA_PATH = "train.csv"   # Replace with your Kaggle CSV path
+    if os.path.exists(DATA_PATH):
+        df = load_data(DATA_PATH)
+    else:
+        df = generate_sample_data()
+
+    # ── Preprocess ────────────────────────────────────────────
+    df = preprocess_dataframe(df)
+
+    # ── Train ─────────────────────────────────────────────────
+    pipeline, X_test, y_test, df_test = train_model(df)
+
+    # ── Evaluate ──────────────────────────────────────────────
+    evaluate_model(pipeline, X_test, y_test)
+
+    # ── Error Analysis ────────────────────────────────────────
+    analyze_errors(df_test)
+
+    # ── Demo Interface ────────────────────────────────────────
+    interactive_demo(pipeline)
+
+    print("\n✓ Project complete.")
+
+
+if __name__ == "__main__":
+    main()
